@@ -64,6 +64,9 @@ function Dagger.datadeps_schedule_dag_aot!(sched::JuMPScheduler, schedule, dag_s
     n_tasks = nv(dag_spec.g)
     n_tasks == 0 && return
 
+    #scale factor so MILP does not run into numerical issues
+    SCALE = sched.Z
+
     nprocs = length(all_procs)
     n_assignment_vars = n_tasks * nprocs
     if n_assignment_vars > JUMP_MAX_ASSIGNMENT_VARS
@@ -98,6 +101,8 @@ function Dagger.datadeps_schedule_dag_aot!(sched::JuMPScheduler, schedule, dag_s
         end
     end
 
+    task_times ./= SCALE
+
     edge_list = [(src(e), dst(e)) for e in edges(dag_spec.g)]
     γ = Dict{Tuple{Int, Int}, Matrix{Float64}}()
     for (k, l) in edge_list
@@ -109,7 +114,7 @@ function Dagger.datadeps_schedule_dag_aot!(sched::JuMPScheduler, schedule, dag_s
             dst_space = only(Dagger.memory_spaces(all_procs[w2]))
             mat[w1, w2] = _milp_transfer_time_ns(snap, src_space, dst_space, size_bytes)
         end
-        γ[(k, l)] = mat
+        γ[(k, l)] = mat ./ SCALE
     end
 
     # Greedy seed serves as MIP warm-start (V&S 2015 §6.1): known incumbent
@@ -183,19 +188,42 @@ function Dagger.datadeps_schedule_dag_aot!(sched::JuMPScheduler, schedule, dag_s
         end
     end
 
+    # we first optimise for makespan
+    @objective(model, Min, t_last_end)
+
+    optimize!(model)
+
+    status = termination_status(model)
+    LAST_MILP_SOLVE[] = (string(status),
+        primal_status(model) == MOI.FEASIBLE_POINT ? Float64(value(t_last_end))*SCALE : NaN)
+    if !(status == MOI.OPTIMAL || status == MOI.TIME_LIMIT)
+        throw(Sch.SchedulingException("JuMPScheduler: solver returned $status; no feasible schedule found"))
+    end
+    if status == MOI.TIME_LIMIT && primal_status(model) != MOI.FEASIBLE_POINT
+        throw(Sch.SchedulingException("JuMPScheduler: time limit $(sched.time_limit_sec)s hit with no feasible schedule found"))
+    end
+
+
+    t_last_min = value(t_last_end)
+
+    # we now add constraints to ensure that the makespan does not exceed the optimal one
+    # we add a small tolerance to avoid numerical issues
+    @constraint(model, t_last_end <= t_last_min*(1 + 1e-6)) 
+
+    # now we optimise to start tasks as early as possible and to reduce cross-proc traffic
     # sum(t) and sum(p) tie-break equally-optimal makespans toward earlier
     # starts and lower cross-proc traffic (matches DagScheduler.jl).
     if !isempty(edge_list)
-        @objective(model, Min, sched.Z * t_last_end + sum(t) + sum(p))
+        @objective(model, Min, sum(t) + sum(p))
     else
-        @objective(model, Min, sched.Z * t_last_end + sum(t))
+        @objective(model, Min, sum(t))
     end
 
     optimize!(model)
 
     status = termination_status(model)
     LAST_MILP_SOLVE[] = (string(status),
-        primal_status(model) == MOI.FEASIBLE_POINT ? Float64(value(t_last_end)) : NaN)
+        primal_status(model) == MOI.FEASIBLE_POINT ? Float64(value(t_last_end))*SCALE : NaN)
     if !(status == MOI.OPTIMAL || status == MOI.TIME_LIMIT)
         throw(Sch.SchedulingException("JuMPScheduler: solver returned $status; no feasible schedule found"))
     end
@@ -214,10 +242,11 @@ function Dagger.datadeps_schedule_dag_aot!(sched::JuMPScheduler, schedule, dag_s
         schedule[task] = proc
         # Propagate our AOT-computed per-task runtime to Sch's fast path.
         # `task_times[k, proc_idx]` is the same nanosecond estimate the MILP
-        # objective minimised for; using it as `options.time_util` means
+        # objective minimised for (when using default Z-scaling=1000.0, it is in miliseconds); 
+        # using it as `options.time_util` means
         # `Sch.has_capacity` skips its `metrics_lookup_runtime` snapshot scan
         # for MILP-scheduled tasks.
-        _propagate_aot_time_util!(dag_spec.id_to_spec[k], proc, task_times[k, proc_idx])
+        _propagate_aot_time_util!(dag_spec.id_to_spec[k], proc, task_times[k, proc_idx]*SCALE)
     end
     return
 end

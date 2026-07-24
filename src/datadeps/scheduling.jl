@@ -1713,7 +1713,7 @@ function _milp_transfer_time_ns(snap::MT.MetricsSnapshot,
 end
 
 """
-    JuMPScheduler(optimizer; Z=10.0, time_limit_sec=60.0) <: DataDepsScheduler
+    JuMPScheduler(optimizer; Z=1000.0, time_limit_sec=60.0) <: DataDepsScheduler
 
 Exact MILP scheduler that solves the basic formulation in §Mathematical
 programming specification of the paper (also DagScheduler.jl README): bi-linear
@@ -1728,8 +1728,11 @@ also be loaded and its `Optimizer` passed as the first argument.
 
 Fields:
 - `optimizer`         — solver constructor passed to `JuMP.Model`.
-- `Z::Float64`        — weight on `t_last_end` in the objective (default `10.0`,
-                        matches DagScheduler.jl).
+- `Z::Float64`        — scaling factor when solving the MILP (default `1000.0`), 
+                        time parameters are divided by this factor to avoid 
+                        numerical issues. It makes sense to increase it 
+                        when the time to execute your DAG exceeds 1000 seconds. 
+                         
 - `time_limit_sec`    — solver wall-clock budget in seconds (default `60.0`).
 
 Usage:
@@ -1748,7 +1751,7 @@ struct JuMPScheduler <: DataDepsScheduler
     Z::Float64
     time_limit_sec::Float64
 
-    function JuMPScheduler(optimizer; Z::Real=10.0, time_limit_sec::Real=60.0)
+    function JuMPScheduler(optimizer; Z::Real=1000.0, time_limit_sec::Real=60.0)
         if Base.get_extension(@__MODULE__, :JuMPExt) === nothing
             throw(ArgumentError("JuMPScheduler requires JuMP to be loaded. Run `using JuMP` (and a solver package such as HiGHS) before constructing this scheduler."))
         end
@@ -1806,7 +1809,7 @@ struct OptimizingScheduler{R<:Random.AbstractRNG} <: DataDepsScheduler
         optimizer=nothing,
         milp_threshold::Integer=OPT_DEFAULT_MILP_THRESHOLD,
         milp_time_limit_sec::Real=60.0,
-        milp_Z::Real=10.0,
+        milp_Z::Real=1000.0,
         ig_n_iters::Integer=IG_DEFAULT_N_ITERS,
         ig_destroy_frac::Real=IG_DEFAULT_DESTROY_FRAC,
         ig_time_limit_sec::Real=IG_DEFAULT_TIME_LIMIT_SEC,

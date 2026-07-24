@@ -156,8 +156,8 @@ function run_n_times(f, n::Int; scheduler::DataDepsScheduler = LayeredScheduler(
 end
 
 # Simple test kernels
-add!(X, Y) = (X .+= Y; X)
-scale!(X, a) = (X .*= a; X)
+@everywhere add!(X, Y) = (X .+= Y; X)
+@everywhere scale!(X, a) = (X .*= a; X)
 
 # ---------- DAGSpec construction ----------
 
@@ -1757,7 +1757,7 @@ end
         @test s.optimizer === nothing
         @test s.milp_threshold == Dagger.OPT_DEFAULT_MILP_THRESHOLD
         @test s.milp_time_limit_sec == 60.0
-        @test s.milp_Z == 10.0
+        @test s.milp_Z == 1000.0
         @test s.ig_n_iters == Dagger.IG_DEFAULT_N_ITERS
         @test s.ig_destroy_frac == Dagger.IG_DEFAULT_DESTROY_FRAC
         @test s.sa_q == Dagger.SA_DEFAULT_Q
@@ -1931,7 +1931,7 @@ end
             sched = Dagger.JuMPScheduler(HiGHS.Optimizer)
             @test sched isa DataDepsScheduler
             @test sched.optimizer === HiGHS.Optimizer
-            @test sched.Z == 10.0
+            @test sched.Z == 1000.0
             @test sched.time_limit_sec == 60.0
 
             sched2 = Dagger.JuMPScheduler(HiGHS.Optimizer; Z=5.0, time_limit_sec=30.0)
@@ -2166,6 +2166,8 @@ end
             n_distinct_procs = length(unique(assigned_procs))
             n_available_procs = length(Dagger.all_processors())
             if n_available_procs >= 2
+
+                # TODO: this seems to fail on MacOS when Sys.isapple() && Sys.ARCH === :aarch64
                 @test n_distinct_procs == 2
             end
         end
@@ -2236,11 +2238,11 @@ end
             opt = OptimizingScheduler(; optimizer=HiGHS.Optimizer,
                                         milp_threshold=10,
                                         milp_time_limit_sec=60.0,
-                                        milp_Z=10.0)
+                                        milp_Z=1000.0)
             sched_opt = Dict{Dagger.DTask, Dagger.Processor}()
             Dagger.datadeps_schedule_dag_aot!(opt, sched_opt, dag_spec, all_procs, all_scope)
 
-            jump = Dagger.JuMPScheduler(HiGHS.Optimizer; Z=10.0, time_limit_sec=60.0)
+            jump = Dagger.JuMPScheduler(HiGHS.Optimizer; Z=1000.0, time_limit_sec=60.0)
             sched_jump = Dict{Dagger.DTask, Dagger.Processor}()
             Dagger.datadeps_schedule_dag_aot!(jump, sched_jump, dag_spec, all_procs, all_scope)
 
